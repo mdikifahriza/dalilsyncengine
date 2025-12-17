@@ -1,26 +1,23 @@
-import React, { useState } from 'react';
+import { useState, type PropsWithChildren } from 'react';
 import Sidebar from './Sidebar';
 import MobileNav from './MobileNav';
 import type { ViewType } from '@/types';
-interface MainLayoutProps {
+
+interface MainLayoutProps extends PropsWithChildren {
   currentView: ViewType;
   onNavigate: (view: ViewType) => void;
-  signOut: () => void;
-  children: React.ReactNode;
 }
 
 export default function MainLayout({
   currentView,
   onNavigate,
-  signOut,
   children,
 }: MainLayoutProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const toggleSidebar = () => setSidebarOpen(!sidebarOpen);
+  const toggleSidebar = () => setSidebarOpen(prev => !prev);
 
   return (
     <div className="flex min-h-screen bg-gray-50">
-
       {/* Sidebar */}
       <Sidebar
         currentView={currentView}
@@ -30,11 +27,13 @@ export default function MainLayout({
       />
 
       {/* Main Content */}
-      <main className="flex-1 pt-16 pb-16 md:pt-0 md:pb-0">
-        {children}
+      <main className="flex-1 pb-16 md:pb-0">
+        <div className="p-4 md:p-6 lg:p-8">
+          {children}
+        </div>
       </main>
 
-      {/* Mobile Navigation (Header + Bottom Nav) */}
+      {/* Mobile Bottom Navigation */}
       <MobileNav
         currentView={currentView}
         onNavigate={onNavigate}

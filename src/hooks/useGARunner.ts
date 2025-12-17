@@ -1,11 +1,12 @@
-// src/hooks/useGARunner.ts
+// src/hooks/useGARunner.ts - UPDATED untuk Time Blocks & Curriculum
 import { useState, useCallback } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { gaService, CreateGARunInput } from '@/services/gaService';
 import { scheduleService, CreateScheduleSlotInput } from '@/services/scheduleService';
+import { timeBlockService } from '@/services/timeBlockService';
+import { curriculumService } from '@/services/curriculumService';
 import { useTeachers } from './useTeachers';
 import { useClasses } from './useClasses';
-import { useSubjects } from './useSubjects';
 import { useRooms } from './useRooms';
 import { GeneticAlgorithm, type Schedule } from '@/lib/geneticAlgorithm';
 import type { GARun } from '@/types/database.types';
@@ -28,7 +29,6 @@ export function useGARunner() {
   const { user } = useAuth();
   const { teachers } = useTeachers();
   const { classes } = useClasses();
-  const { subjects } = useSubjects();
   const { rooms } = useRooms();
 
   const [isRunning, setIsRunning] = useState(false);
@@ -36,7 +36,7 @@ export function useGARunner() {
   const [error, setError] = useState<string | null>(null);
 
   /**
-   * Run Genetic Algorithm with proper evolution
+   * Run Genetic Algorithm with Time Blocks & Curriculum
    */
   const runGA = useCallback(
     async (config: CreateGARunInput): Promise<GAResult | null> => {
@@ -44,8 +44,9 @@ export function useGARunner() {
         throw new Error('User not authenticated');
       }
 
-      if (teachers.length === 0 || classes.length === 0 || subjects.length === 0 || rooms.length === 0) {
-        throw new Error('Data tidak lengkap. Pastikan sudah ada guru, kelas, mata pelajaran, dan ruangan.');
+      // Validation
+      if (teachers.length === 0 || classes.length === 0 || rooms.length === 0) {
+        throw new Error('Data tidak lengkap. Pastikan sudah ada guru, kelas, dan ruangan.');
       }
 
       setIsRunning(true);
@@ -60,29 +61,50 @@ export function useGARunner() {
       let gaRunRecord: GARun | null = null;
 
       try {
+        // UPDATED: Load time blocks & curriculum
+        const [timeBlocks, curriculum] = await Promise.all([
+          timeBlockService.getLessonBlocks(user.id),
+          curriculumService.getAll(user.id),
+        ]);
+
+        // Validation
+        if (timeBlocks.length === 0) {
+          throw new Error('Tidak ada blok waktu untuk pelajaran. Silakan atur blok waktu terlebih dahulu.');
+        }
+
+        if (curriculum.length === 0) {
+          throw new Error('Tidak ada kurikulum yang diatur. Silakan atur kurikulum kelas terlebih dahulu.');
+        }
+
+        // Validate curriculum
+        const validation = await curriculumService.validate(user.id);
+        if (!validation.valid) {
+          throw new Error(`Kurikulum belum lengkap: ${validation.errors[0]}`);
+        }
+
         // Create GA run record in database
         gaRunRecord = await gaService.create(user.id, config);
 
-        // Initialize Genetic Algorithm
+        // UPDATED: Initialize GA with time blocks & curriculum
         const ga = new GeneticAlgorithm(
           {
             maxGenerations: config.max_generations,
             populationSize: config.population_size,
-            eliteSize: Math.max(2, Math.floor(config.population_size * 0.1)), // 10% elite
-            mutationRate: 0.3, // 30% chance to mutate
-            crossoverRate: 0.8, // 80% chance to crossover
+            eliteSize: Math.max(2, Math.floor(config.population_size * 0.1)),
+            mutationRate: 0.3,
+            crossoverRate: 0.8,
           },
           teachers,
           classes,
-          subjects,
-          rooms
+          rooms,
+          timeBlocks, // BARU
+          curriculum  // BARU
         );
 
         setProgress(prev => prev ? { ...prev, status: 'running' } : null);
 
         // Run evolution with progress callback
         const bestSchedule = await new Promise<Schedule>((resolve) => {
-          // Run in next tick to allow UI update
           setTimeout(() => {
             const result = ga.evolve((gen, best) => {
               setProgress({
@@ -96,10 +118,16 @@ export function useGARunner() {
           }, 100);
         });
 
-        // Convert to database format
+        // UPDATED: Convert to database format dengan time_block_id
         const scheduleSlots: CreateScheduleSlotInput[] = bestSchedule.slots.map(slot => ({
           ga_run_id: gaRunRecord.id,
-          ...slot,
+          kelas_id: slot.kelas_id,
+          guru_id: slot.guru_id,
+          mapel_id: slot.mapel_id,
+          ruang_id: slot.ruang_id,
+          hari: slot.hari,
+          time_block_id: slot.time_block_id, // BARU
+          jam_ke: slot.jam_ke, // backward compatibility
         }));
 
         // Save schedule to database
@@ -140,7 +168,7 @@ export function useGARunner() {
         setIsRunning(false);
       }
     },
-    [user, teachers, classes, subjects, rooms]
+    [user, teachers, classes, rooms]
   );
 
   return {

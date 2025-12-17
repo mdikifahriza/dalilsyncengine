@@ -11,6 +11,10 @@ import SubjectsPage from './pages/SubjectsPage';
 import RoomsPage from './pages/RoomsPage';
 import GeneratorPage from './pages/GeneratorPage';
 import SchedulePage from './pages/SchedulePage';
+import TimeBlocksPage from './pages/TimeBlocksPage';
+import CurriculumPage from './pages/CurriculumPage';
+import SchoolSettingsPage from './pages/SchoolSettingsPage';
+import SetupWizardPage from './pages/SetupWizardPage';
 import type { ViewType } from './types';
 
 function AppContent() {
@@ -45,6 +49,8 @@ function AppContent() {
         return <DashboardPage />;
       case 'teachers':
         return <TeachersPage />;
+      case 'time-blocks':
+        return <TimeBlocksPage />;
       case 'classes':
         return <ClassesPage />;
       case 'subjects':
@@ -55,6 +61,10 @@ function AppContent() {
         return <GeneratorPage />;
       case 'schedule':
         return <SchedulePage />;
+      case 'curriculum':
+        return <CurriculumPage />;
+      case 'school-settings':
+        return <SchoolSettingsPage />;
       default:
         return <DashboardPage />;
     }

@@ -1,7 +1,7 @@
-// src/lib/geneticAlgorithm.ts
+// src/lib/geneticAlgorithm.ts - UPDATED untuk Time Blocks & Curriculum
 // Pure GA logic - No React dependencies
 
-import type { Teacher, Subject, ClassGroup, Room } from '@/types/database.types';
+import type { Teacher, ClassGroup, Room, TimeBlock, MapelKelas } from '@/types/database.types';
 
 export interface Schedule {
   slots: ScheduleGene[];
@@ -15,7 +15,8 @@ export interface ScheduleGene {
   mapel_id: number;
   ruang_id: number;
   hari: string;
-  jam_ke: number;
+  time_block_id: number; // UPDATED: sekarang wajib
+  jam_ke?: number; // OPTIONAL: untuk backward compatibility
 }
 
 export interface GAConfig {
@@ -31,28 +32,28 @@ export interface ValidationResult {
   errors: string[];
 }
 
-const DAYS = ['Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat'];
-const HOURS_PER_DAY = 8;
-
 export class GeneticAlgorithm {
   private config: GAConfig;
   private teachers: Teacher[];
   private classes: ClassGroup[];
-  private subjects: Subject[];
   private rooms: Room[];
+  private timeBlocks: TimeBlock[]; // BARU
+  private curriculum: MapelKelas[]; // BARU: ganti subjects
 
   constructor(
     config: GAConfig,
     teachers: Teacher[],
     classes: ClassGroup[],
-    subjects: Subject[],
-    rooms: Room[]
+    rooms: Room[],
+    timeBlocks: TimeBlock[], // BARU
+    curriculum: MapelKelas[] // BARU
   ) {
     this.config = config;
     this.teachers = teachers;
     this.classes = classes;
-    this.subjects = subjects;
     this.rooms = rooms;
+    this.timeBlocks = timeBlocks.filter(tb => tb.tipe_block === 'lesson' && !tb.is_fixed);
+    this.curriculum = curriculum;
   }
 
   /**
@@ -96,11 +97,9 @@ export class GeneticAlgorithm {
 
       // Fill rest with offspring
       while (newPopulation.length < this.config.populationSize) {
-        // Selection
         const parent1 = this.tournamentSelection(population);
         const parent2 = this.tournamentSelection(population);
 
-        // Crossover
         let child: Schedule;
         if (Math.random() < this.config.crossoverRate) {
           child = this.crossover(parent1, parent2);
@@ -108,7 +107,6 @@ export class GeneticAlgorithm {
           child = { ...parent1 };
         }
 
-        // Mutation
         if (Math.random() < this.config.mutationRate) {
           child = this.mutate(child);
         }
@@ -137,52 +135,82 @@ export class GeneticAlgorithm {
   }
 
   /**
-   * Create one random schedule
+   * Create one random schedule - UPDATED untuk Time Blocks
    */
   private createRandomSchedule(): Schedule {
     const slots: ScheduleGene[] = [];
 
+    // UPDATED: Loop per kelas, bukan per subject global
     for (const kelas of this.classes) {
       const usedSlots = new Set<string>();
+      
+      // Get curriculum untuk kelas ini
+      const kelasCurriculum = this.curriculum.filter(c => c.kelas_id === kelas.id);
 
-      for (const subject of this.subjects) {
-        const hoursNeeded = subject.jumlah_jam_per_minggu;
-        const teacher = this.teachers.find(t => t.mapel_id === subject.id);
-
+      for (const currItem of kelasCurriculum) {
+        const teacher = this.teachers.find(t => t.id === currItem.guru_id);
         if (!teacher) continue;
+
+        const hoursNeeded = currItem.jumlah_jam_per_minggu;
 
         for (let h = 0; h < hoursNeeded; h++) {
           let attempts = 0;
           let assigned = false;
 
           while (attempts < 200 && !assigned) {
-            const day = DAYS[Math.floor(Math.random() * DAYS.length)];
-            const hour = Math.floor(Math.random() * HOURS_PER_DAY) + 1;
-            const slotKey = `${kelas.id}-${day}-${hour}`;
+            // UPDATED: Pilih time block random
+            const availableBlocks = this.getAvailableBlocks(kelas);
+            if (availableBlocks.length === 0) break;
+
+            const timeBlock = availableBlocks[Math.floor(Math.random() * availableBlocks.length)];
+            
+            // Generate hari based on hari_operasional kelas
+            const hariOperasional = kelas.hari_operasional || ['Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat'];
+            const hari = hariOperasional[Math.floor(Math.random() * hariOperasional.length)];
+
+            // Check jika time block berlaku di hari ini
+            if (timeBlock.hari_berlaku && timeBlock.hari_berlaku.length > 0) {
+              if (!timeBlock.hari_berlaku.includes(hari)) {
+                attempts++;
+                continue;
+              }
+            }
+
+            const slotKey = `${kelas.id}-${hari}-${timeBlock.id}`;
 
             if (!usedSlots.has(slotKey)) {
               // Check teacher availability
-              if (teacher.hari_tidak_bisa && teacher.hari_tidak_bisa.includes(day)) {
+              if (teacher.hari_tidak_bisa && teacher.hari_tidak_bisa.includes(hari)) {
                 attempts++;
                 continue;
               }
 
               // Select room
               let room = this.rooms[Math.floor(Math.random() * this.rooms.length)];
-              if (subject.ruang_khusus) {
+              
+              // Check for special room requirement
+              const mapel = this.curriculum.find(c => c.mapel_id === currItem.mapel_id);
+              if (mapel?.mapel?.ruang_khusus) {
                 const specialRoom = this.rooms.find(r =>
-                  r.nama_ruang.toLowerCase().includes(subject.ruang_khusus!.toLowerCase())
+                  r.nama_ruang.toLowerCase().includes(mapel.mapel.ruang_khusus!.toLowerCase())
                 );
                 if (specialRoom) room = specialRoom;
+              }
+
+              // Check if kelas has default room
+              if (kelas.ruang_default_id && !mapel?.mapel?.ruang_khusus) {
+                const defaultRoom = this.rooms.find(r => r.id === kelas.ruang_default_id);
+                if (defaultRoom) room = defaultRoom;
               }
 
               slots.push({
                 kelas_id: kelas.id,
                 guru_id: teacher.id,
-                mapel_id: subject.id,
+                mapel_id: currItem.mapel_id,
                 ruang_id: room.id,
-                hari: day,
-                jam_ke: hour,
+                hari: hari,
+                time_block_id: timeBlock.id,
+                jam_ke: timeBlock.urutan, // untuk backward compatibility
               });
 
               usedSlots.add(slotKey);
@@ -196,6 +224,21 @@ export class GeneticAlgorithm {
     }
 
     return { slots, fitness: 0, conflicts: [] };
+  }
+
+  /**
+   * Get available time blocks for a class
+   */
+  private getAvailableBlocks(kelas: ClassGroup): TimeBlock[] {
+    return this.timeBlocks.filter(tb => {
+      // Filter by jam_mulai and jam_selesai of class
+      if (kelas.jam_mulai && kelas.jam_selesai) {
+        const blockStart = tb.jam_mulai;
+        const blockEnd = tb.jam_selesai;
+        return blockStart >= kelas.jam_mulai && blockEnd <= kelas.jam_selesai;
+      }
+      return true;
+    });
   }
 
   /**
@@ -228,20 +271,31 @@ export class GeneticAlgorithm {
   }
 
   /**
-   * Mutation operator
+   * Mutation operator - UPDATED untuk Time Blocks
    */
   private mutate(schedule: Schedule): Schedule {
     const mutatedSlots = schedule.slots.map(slot => {
       if (Math.random() < 0.1) {
-        // 10% chance to mutate each gene
         const mutationType = Math.random();
 
         if (mutationType < 0.33) {
-          // Change day
-          return { ...slot, hari: DAYS[Math.floor(Math.random() * DAYS.length)] };
+          // Change hari
+          const kelas = this.classes.find(c => c.id === slot.kelas_id);
+          const hariOperasional = kelas?.hari_operasional || ['Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat'];
+          return { 
+            ...slot, 
+            hari: hariOperasional[Math.floor(Math.random() * hariOperasional.length)] 
+          };
         } else if (mutationType < 0.66) {
-          // Change hour
-          return { ...slot, jam_ke: Math.floor(Math.random() * HOURS_PER_DAY) + 1 };
+          // Change time block
+          const kelas = this.classes.find(c => c.id === slot.kelas_id);
+          const availableBlocks = kelas ? this.getAvailableBlocks(kelas) : this.timeBlocks;
+          const newBlock = availableBlocks[Math.floor(Math.random() * availableBlocks.length)];
+          return {
+            ...slot,
+            time_block_id: newBlock.id,
+            jam_ke: newBlock.urutan,
+          };
         } else {
           // Change room
           return {
@@ -258,7 +312,7 @@ export class GeneticAlgorithm {
   }
 
   /**
-   * Calculate fitness score (0-100)
+   * Calculate fitness score (0-100) - UPDATED
    */
   private calculateFitness(schedule: Schedule): number {
     let score = 100;
@@ -266,7 +320,7 @@ export class GeneticAlgorithm {
     // 1. Teacher conflicts (same teacher, same time)
     const teacherMap = new Map<string, number>();
     schedule.slots.forEach(slot => {
-      const key = `${slot.guru_id}-${slot.hari}-${slot.jam_ke}`;
+      const key = `${slot.guru_id}-${slot.hari}-${slot.time_block_id}`;
       teacherMap.set(key, (teacherMap.get(key) || 0) + 1);
     });
 
@@ -279,7 +333,7 @@ export class GeneticAlgorithm {
     // 2. Room conflicts (same room, same time)
     const roomMap = new Map<string, number>();
     schedule.slots.forEach(slot => {
-      const key = `${slot.ruang_id}-${slot.hari}-${slot.jam_ke}`;
+      const key = `${slot.ruang_id}-${slot.hari}-${slot.time_block_id}`;
       roomMap.set(key, (roomMap.get(key) || 0) + 1);
     });
 
@@ -289,10 +343,10 @@ export class GeneticAlgorithm {
       }
     });
 
-    // 3. Class conflicts (same class, same time, multiple subjects)
+    // 3. Class conflicts (same class, same time)
     const classMap = new Map<string, number>();
     schedule.slots.forEach(slot => {
-      const key = `${slot.kelas_id}-${slot.hari}-${slot.jam_ke}`;
+      const key = `${slot.kelas_id}-${slot.hari}-${slot.time_block_id}`;
       classMap.set(key, (classMap.get(key) || 0) + 1);
     });
 
@@ -321,17 +375,20 @@ export class GeneticAlgorithm {
       dayDistribution.set(slot.hari, (dayDistribution.get(slot.hari) || 0) + 1);
     });
 
-    const avgPerDay = schedule.slots.length / DAYS.length;
-    dayDistribution.forEach(count => {
-      const deviation = Math.abs(count - avgPerDay);
-      score -= deviation * 0.2;
-    });
+    const days = Array.from(dayDistribution.keys());
+    if (days.length > 0) {
+      const avgPerDay = schedule.slots.length / days.length;
+      dayDistribution.forEach(count => {
+        const deviation = Math.abs(count - avgPerDay);
+        score -= deviation * 0.2;
+      });
+    }
 
     return Math.max(0, Math.min(100, score));
   }
 
   /**
-   * Detect all conflicts
+   * Detect all conflicts - UPDATED
    */
   private detectConflicts(schedule: Schedule): string[] {
     const conflicts: string[] = [];
@@ -339,7 +396,7 @@ export class GeneticAlgorithm {
     // Teacher conflicts
     const teacherMap = new Map<string, ScheduleGene[]>();
     schedule.slots.forEach(slot => {
-      const key = `${slot.guru_id}-${slot.hari}-${slot.jam_ke}`;
+      const key = `${slot.guru_id}-${slot.hari}-${slot.time_block_id}`;
       if (!teacherMap.has(key)) teacherMap.set(key, []);
       teacherMap.get(key)!.push(slot);
     });
@@ -347,14 +404,17 @@ export class GeneticAlgorithm {
     teacherMap.forEach((slots, key) => {
       if (slots.length > 1) {
         const teacher = this.teachers.find(t => t.id === slots[0].guru_id);
-        conflicts.push(`Guru ${teacher?.nama} mengajar ${slots.length} kelas pada ${key}`);
+        const timeBlock = this.timeBlocks.find(tb => tb.id === slots[0].time_block_id);
+        conflicts.push(
+          `Guru ${teacher?.nama} mengajar ${slots.length} kelas pada ${slots[0].hari} ${timeBlock?.nama_block}`
+        );
       }
     });
 
     // Room conflicts
     const roomMap = new Map<string, ScheduleGene[]>();
     schedule.slots.forEach(slot => {
-      const key = `${slot.ruang_id}-${slot.hari}-${slot.jam_ke}`;
+      const key = `${slot.ruang_id}-${slot.hari}-${slot.time_block_id}`;
       if (!roomMap.has(key)) roomMap.set(key, []);
       roomMap.get(key)!.push(slot);
     });
@@ -362,7 +422,10 @@ export class GeneticAlgorithm {
     roomMap.forEach((slots, key) => {
       if (slots.length > 1) {
         const room = this.rooms.find(r => r.id === slots[0].ruang_id);
-        conflicts.push(`Ruang ${room?.nama_ruang} digunakan ${slots.length} kelas pada ${key}`);
+        const timeBlock = this.timeBlocks.find(tb => tb.id === slots[0].time_block_id);
+        conflicts.push(
+          `Ruang ${room?.nama_ruang} digunakan ${slots.length} kelas pada ${slots[0].hari} ${timeBlock?.nama_block}`
+        );
       }
     });
 
@@ -370,26 +433,27 @@ export class GeneticAlgorithm {
   }
 
   /**
-   * Validate schedule
+   * Validate schedule - UPDATED
    */
   public validate(schedule: Schedule): ValidationResult {
     const errors: string[] = [];
 
-    // Check subject hours requirement
-    const subjectHours = new Map<number, number>();
-    schedule.slots.forEach(slot => {
-      subjectHours.set(slot.mapel_id, (subjectHours.get(slot.mapel_id) || 0) + 1);
-    });
+    // Check curriculum requirements per kelas
+    for (const kelas of this.classes) {
+      const kelasCurriculum = this.curriculum.filter(c => c.kelas_id === kelas.id);
+      
+      for (const currItem of kelasCurriculum) {
+        const count = schedule.slots.filter(
+          s => s.kelas_id === kelas.id && s.mapel_id === currItem.mapel_id
+        ).length;
 
-    this.subjects.forEach(subject => {
-      const hours = subjectHours.get(subject.id) || 0;
-      const required = subject.jumlah_jam_per_minggu * this.classes.length;
-      if (hours !== required) {
-        errors.push(
-          `Mapel ${subject.nama_mapel}: ${hours} jam (seharusnya ${required})`
-        );
+        if (count !== currItem.jumlah_jam_per_minggu) {
+          errors.push(
+            `Kelas ${kelas.nama_kelas} - Mapel ID ${currItem.mapel_id}: ${count} jam (seharusnya ${currItem.jumlah_jam_per_minggu})`
+          );
+        }
       }
-    });
+    }
 
     // Check conflicts
     const conflicts = this.detectConflicts(schedule);
