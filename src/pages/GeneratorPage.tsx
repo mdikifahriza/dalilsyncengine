@@ -1,7 +1,7 @@
-// src/pages/GeneratorPage.tsx
+// src/pages/GeneratorPage.tsx - UPDATED dengan validasi jam operasional
 import { useState } from 'react';
 import { motion } from 'framer-motion';
-import { Sparkles, Play, AlertCircle, CheckCircle, Settings, TrendingUp } from 'lucide-react';
+import { Sparkles, Play, AlertCircle, CheckCircle, Settings, TrendingUp, Clock } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
@@ -38,6 +38,12 @@ export default function GeneratorPage({ onNavigate }: GeneratorPageProps) {
     if (gaResult) {
       setResult(gaResult);
     }
+  };
+
+  // FIXED: Format time helper
+  const formatTime = (time?: string) => {
+    if (!time) return 'N/A';
+    return time.slice(0, 5);
   };
 
   return (
@@ -98,6 +104,38 @@ export default function GeneratorPage({ onNavigate }: GeneratorPageProps) {
             Silakan lengkapi data guru, kelas, mata pelajaran, dan ruangan terlebih dahulu sebelum generate jadwal.
           </AlertDescription>
         </Alert>
+      )}
+
+      {/* FIXED: Class Operating Hours Info */}
+      {classes.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Clock className="w-5 h-5" />
+              Jam Operasional Kelas
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-2">
+              {classes.map(kelas => (
+                <div key={kelas.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                  <span className="font-medium text-gray-900">{kelas.nama_kelas}</span>
+                  <div className="flex items-center gap-4 text-sm">
+                    <span className="text-gray-600">
+                      {formatTime(kelas.jam_mulai)} - {formatTime(kelas.jam_selesai)}
+                    </span>
+                    <span className="text-gray-500">
+                      {kelas.hari_operasional?.length || 5} hari
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <p className="text-xs text-gray-500 mt-3">
+              💡 Algoritma akan memastikan semua jadwal berada dalam jam operasional masing-masing kelas
+            </p>
+          </CardContent>
+        </Card>
       )}
 
       {/* Configuration */}
@@ -277,6 +315,7 @@ export default function GeneratorPage({ onNavigate }: GeneratorPageProps) {
             <li>• <strong>Mutation</strong>: Perubahan random untuk variasi</li>
             <li>• <strong>Evolution</strong>: Ulangi hingga N generasi, jadwal makin optimal</li>
             <li>• <strong>Fitness</strong>: Skor kualitas (0-100, makin tinggi makin baik)</li>
+            <li>• <strong>✨ Jam Operasional</strong>: Algoritma akan STRICTLY enforce jam pulang berbeda per kelas</li>
           </ul>
         </CardContent>
       </Card>

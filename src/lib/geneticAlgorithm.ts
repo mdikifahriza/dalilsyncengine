@@ -1,4 +1,4 @@
-// src/lib/geneticAlgorithm.ts - UPDATED untuk Time Blocks & Curriculum
+// src/lib/geneticAlgorithm.ts - FIXED: Enforce Jam Pulang Per Kelas
 // Pure GA logic - No React dependencies
 
 import type { Teacher, ClassGroup, Room, TimeBlock, MapelKelas } from '@/types/database.types';
@@ -15,8 +15,8 @@ export interface ScheduleGene {
   mapel_id: number;
   ruang_id: number;
   hari: string;
-  time_block_id: number; // UPDATED: sekarang wajib
-  jam_ke?: number; // OPTIONAL: untuk backward compatibility
+  time_block_id: number;
+  jam_ke?: number;
 }
 
 export interface GAConfig {
@@ -37,16 +37,16 @@ export class GeneticAlgorithm {
   private teachers: Teacher[];
   private classes: ClassGroup[];
   private rooms: Room[];
-  private timeBlocks: TimeBlock[]; // BARU
-  private curriculum: MapelKelas[]; // BARU: ganti subjects
+  private timeBlocks: TimeBlock[];
+  private curriculum: MapelKelas[];
 
   constructor(
     config: GAConfig,
     teachers: Teacher[],
     classes: ClassGroup[],
     rooms: Room[],
-    timeBlocks: TimeBlock[], // BARU
-    curriculum: MapelKelas[] // BARU
+    timeBlocks: TimeBlock[],
+    curriculum: MapelKelas[]
   ) {
     this.config = config;
     this.teachers = teachers;
@@ -56,46 +56,33 @@ export class GeneticAlgorithm {
     this.curriculum = curriculum;
   }
 
-  /**
-   * Main evolution loop
-   */
   public evolve(onProgress?: (gen: number, best: Schedule) => void): Schedule {
-    // Initialize population
     let population = this.initializePopulation();
-
     let bestEver: Schedule = population[0];
 
-    // Evolution loop
     for (let gen = 0; gen < this.config.maxGenerations; gen++) {
-      // Evaluate fitness
       population = population.map(schedule => ({
         ...schedule,
         fitness: this.calculateFitness(schedule),
         conflicts: this.detectConflicts(schedule),
       }));
 
-      // Sort by fitness (descending)
       population.sort((a, b) => b.fitness - a.fitness);
 
-      // Update best
       if (population[0].fitness > bestEver.fitness) {
         bestEver = { ...population[0] };
       }
 
-      // Callback for progress
       if (onProgress) {
         onProgress(gen + 1, bestEver);
       }
 
-      // Create new generation
       const newPopulation: Schedule[] = [];
 
-      // Elitism: Keep best schedules
       for (let i = 0; i < this.config.eliteSize; i++) {
         newPopulation.push({ ...population[i] });
       }
 
-      // Fill rest with offspring
       while (newPopulation.length < this.config.populationSize) {
         const parent1 = this.tournamentSelection(population);
         const parent2 = this.tournamentSelection(population);
@@ -120,9 +107,6 @@ export class GeneticAlgorithm {
     return bestEver;
   }
 
-  /**
-   * Initialize random population
-   */
   private initializePopulation(): Schedule[] {
     const population: Schedule[] = [];
 
@@ -134,17 +118,11 @@ export class GeneticAlgorithm {
     return population;
   }
 
-  /**
-   * Create one random schedule - UPDATED untuk Time Blocks
-   */
   private createRandomSchedule(): Schedule {
     const slots: ScheduleGene[] = [];
 
-    // UPDATED: Loop per kelas, bukan per subject global
     for (const kelas of this.classes) {
       const usedSlots = new Set<string>();
-      
-      // Get curriculum untuk kelas ini
       const kelasCurriculum = this.curriculum.filter(c => c.kelas_id === kelas.id);
 
       for (const currItem of kelasCurriculum) {
@@ -158,17 +136,16 @@ export class GeneticAlgorithm {
           let assigned = false;
 
           while (attempts < 200 && !assigned) {
-            // UPDATED: Pilih time block random
-            const availableBlocks = this.getAvailableBlocks(kelas);
+            // FIXED: Get available blocks yang sesuai jam operasional kelas
+            const availableBlocks = this.getAvailableBlocksForClass(kelas);
             if (availableBlocks.length === 0) break;
 
             const timeBlock = availableBlocks[Math.floor(Math.random() * availableBlocks.length)];
             
-            // Generate hari based on hari_operasional kelas
             const hariOperasional = kelas.hari_operasional || ['Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat'];
             const hari = hariOperasional[Math.floor(Math.random() * hariOperasional.length)];
 
-            // Check jika time block berlaku di hari ini
+            // Check if time block berlaku di hari ini
             if (timeBlock.hari_berlaku && timeBlock.hari_berlaku.length > 0) {
               if (!timeBlock.hari_berlaku.includes(hari)) {
                 attempts++;
@@ -179,16 +156,13 @@ export class GeneticAlgorithm {
             const slotKey = `${kelas.id}-${hari}-${timeBlock.id}`;
 
             if (!usedSlots.has(slotKey)) {
-              // Check teacher availability
               if (teacher.hari_tidak_bisa && teacher.hari_tidak_bisa.includes(hari)) {
                 attempts++;
                 continue;
               }
 
-              // Select room
               let room = this.rooms[Math.floor(Math.random() * this.rooms.length)];
               
-              // Check for special room requirement
               const mapel = this.curriculum.find(c => c.mapel_id === currItem.mapel_id);
               if (mapel?.mapel?.ruang_khusus) {
                 const specialRoom = this.rooms.find(r =>
@@ -197,7 +171,6 @@ export class GeneticAlgorithm {
                 if (specialRoom) room = specialRoom;
               }
 
-              // Check if kelas has default room
               if (kelas.ruang_default_id && !mapel?.mapel?.ruang_khusus) {
                 const defaultRoom = this.rooms.find(r => r.id === kelas.ruang_default_id);
                 if (defaultRoom) room = defaultRoom;
@@ -210,7 +183,7 @@ export class GeneticAlgorithm {
                 ruang_id: room.id,
                 hari: hari,
                 time_block_id: timeBlock.id,
-                jam_ke: timeBlock.urutan, // untuk backward compatibility
+                jam_ke: timeBlock.urutan,
               });
 
               usedSlots.add(slotKey);
@@ -227,23 +200,48 @@ export class GeneticAlgorithm {
   }
 
   /**
-   * Get available time blocks for a class
+   * FIXED: Get available time blocks yang STRICTLY dalam jam operasional kelas
    */
-  private getAvailableBlocks(kelas: ClassGroup): TimeBlock[] {
+  private getAvailableBlocksForClass(kelas: ClassGroup): TimeBlock[] {
     return this.timeBlocks.filter(tb => {
-      // Filter by jam_mulai and jam_selesai of class
+      // FIXED: Strict check jam_mulai dan jam_selesai kelas
       if (kelas.jam_mulai && kelas.jam_selesai) {
-        const blockStart = tb.jam_mulai;
-        const blockEnd = tb.jam_selesai;
-        return blockStart >= kelas.jam_mulai && blockEnd <= kelas.jam_selesai;
+        const blockStart = tb.jam_mulai.slice(0, 5); // "07:00:00" -> "07:00"
+        const blockEnd = tb.jam_selesai.slice(0, 5);
+        const classStart = kelas.jam_mulai.slice(0, 5);
+        const classEnd = kelas.jam_selesai.slice(0, 5);
+
+        // Block harus SEPENUHNYA dalam range kelas
+        // Block start >= class start DAN block end <= class end
+        return blockStart >= classStart && blockEnd <= classEnd;
       }
       return true;
     });
   }
 
   /**
-   * Tournament selection
+   * FIXED: Validate apakah time block sesuai dengan jam operasional kelas
    */
+  private isValidSlotForClass(slot: ScheduleGene): boolean {
+    const kelas = this.classes.find(c => c.id === slot.kelas_id);
+    if (!kelas) return false;
+
+    const timeBlock = this.timeBlocks.find(tb => tb.id === slot.time_block_id);
+    if (!timeBlock) return false;
+
+    // FIXED: Check strict
+    if (kelas.jam_mulai && kelas.jam_selesai) {
+      const blockStart = timeBlock.jam_mulai.slice(0, 5);
+      const blockEnd = timeBlock.jam_selesai.slice(0, 5);
+      const classStart = kelas.jam_mulai.slice(0, 5);
+      const classEnd = kelas.jam_selesai.slice(0, 5);
+
+      return blockStart >= classStart && blockEnd <= classEnd;
+    }
+
+    return true;
+  }
+
   private tournamentSelection(population: Schedule[], tournamentSize = 5): Schedule {
     const tournament: Schedule[] = [];
 
@@ -256,9 +254,6 @@ export class GeneticAlgorithm {
     return tournament[0];
   }
 
-  /**
-   * One-point crossover
-   */
   private crossover(parent1: Schedule, parent2: Schedule): Schedule {
     const cutPoint = Math.floor(Math.random() * parent1.slots.length);
 
@@ -270,9 +265,6 @@ export class GeneticAlgorithm {
     return { slots: childSlots, fitness: 0, conflicts: [] };
   }
 
-  /**
-   * Mutation operator - UPDATED untuk Time Blocks
-   */
   private mutate(schedule: Schedule): Schedule {
     const mutatedSlots = schedule.slots.map(slot => {
       if (Math.random() < 0.1) {
@@ -287,15 +279,20 @@ export class GeneticAlgorithm {
             hari: hariOperasional[Math.floor(Math.random() * hariOperasional.length)] 
           };
         } else if (mutationType < 0.66) {
-          // Change time block
+          // FIXED: Change time block dengan validasi
           const kelas = this.classes.find(c => c.id === slot.kelas_id);
-          const availableBlocks = kelas ? this.getAvailableBlocks(kelas) : this.timeBlocks;
-          const newBlock = availableBlocks[Math.floor(Math.random() * availableBlocks.length)];
-          return {
-            ...slot,
-            time_block_id: newBlock.id,
-            jam_ke: newBlock.urutan,
-          };
+          if (kelas) {
+            const availableBlocks = this.getAvailableBlocksForClass(kelas);
+            if (availableBlocks.length > 0) {
+              const newBlock = availableBlocks[Math.floor(Math.random() * availableBlocks.length)];
+              return {
+                ...slot,
+                time_block_id: newBlock.id,
+                jam_ke: newBlock.urutan,
+              };
+            }
+          }
+          return slot;
         } else {
           // Change room
           return {
@@ -312,12 +309,41 @@ export class GeneticAlgorithm {
   }
 
   /**
-   * Calculate fitness score (0-100) - UPDATED
+   * FIXED: Calculate fitness dengan penalty untuk slot di luar jam kelas
    */
   private calculateFitness(schedule: Schedule): number {
     let score = 100;
 
-    // 1. Teacher conflicts (same teacher, same time)
+    // FIXED 1: Penalty BERAT untuk slot di luar jam operasional kelas
+    let invalidTimeSlots = 0;
+    schedule.slots.forEach(slot => {
+      if (!this.isValidSlotForClass(slot)) {
+        invalidTimeSlots++;
+      }
+    });
+    score -= invalidTimeSlots * 25; // VERY HEAVY PENALTY
+
+    // FIXED 2: Penalty untuk distribusi jam tidak merata per hari per kelas
+    const dailyHoursPerClass = new Map<string, number>();
+    schedule.slots.forEach(slot => {
+      const key = `${slot.kelas_id}-${slot.hari}`;
+      dailyHoursPerClass.set(key, (dailyHoursPerClass.get(key) || 0) + 1);
+    });
+
+    // Check apakah ada kelas yang exceed jam_selesai di hari tertentu
+    dailyHoursPerClass.forEach((hours, key) => {
+      const [kelasId, hari] = key.split('-');
+      const kelas = this.classes.find(c => c.id === parseInt(kelasId));
+      if (kelas && kelas.jam_mulai && kelas.jam_selesai) {
+        // Hitung max jam per hari dari time blocks available
+        const availableBlocks = this.getAvailableBlocksForClass(kelas);
+        if (hours > availableBlocks.length) {
+          score -= (hours - availableBlocks.length) * 10;
+        }
+      }
+    });
+
+    // 1. Teacher conflicts
     const teacherMap = new Map<string, number>();
     schedule.slots.forEach(slot => {
       const key = `${slot.guru_id}-${slot.hari}-${slot.time_block_id}`;
@@ -326,11 +352,11 @@ export class GeneticAlgorithm {
 
     teacherMap.forEach(count => {
       if (count > 1) {
-        score -= (count - 1) * 15; // Heavy penalty
+        score -= (count - 1) * 15;
       }
     });
 
-    // 2. Room conflicts (same room, same time)
+    // 2. Room conflicts
     const roomMap = new Map<string, number>();
     schedule.slots.forEach(slot => {
       const key = `${slot.ruang_id}-${slot.hari}-${slot.time_block_id}`;
@@ -343,7 +369,7 @@ export class GeneticAlgorithm {
       }
     });
 
-    // 3. Class conflicts (same class, same time)
+    // 3. Class conflicts
     const classMap = new Map<string, number>();
     schedule.slots.forEach(slot => {
       const key = `${slot.kelas_id}-${slot.hari}-${slot.time_block_id}`;
@@ -352,7 +378,7 @@ export class GeneticAlgorithm {
 
     classMap.forEach(count => {
       if (count > 1) {
-        score -= (count - 1) * 20; // Very heavy penalty
+        score -= (count - 1) * 20;
       }
     });
 
@@ -388,10 +414,24 @@ export class GeneticAlgorithm {
   }
 
   /**
-   * Detect all conflicts - UPDATED
+   * FIXED: Detect conflicts termasuk invalid time slots
    */
   private detectConflicts(schedule: Schedule): string[] {
     const conflicts: string[] = [];
+
+    // FIXED: Detect invalid time slots (di luar jam operasional kelas)
+    schedule.slots.forEach(slot => {
+      if (!this.isValidSlotForClass(slot)) {
+        const kelas = this.classes.find(c => c.id === slot.kelas_id);
+        const timeBlock = this.timeBlocks.find(tb => tb.id === slot.time_block_id);
+        if (kelas && timeBlock) {
+          conflicts.push(
+            `⚠️ ${kelas.nama_kelas} dijadwalkan di ${timeBlock.nama_block} (${timeBlock.jam_mulai}-${timeBlock.jam_selesai}) ` +
+            `yang melebihi jam operasional kelas (${kelas.jam_mulai}-${kelas.jam_selesai})`
+          );
+        }
+      }
+    });
 
     // Teacher conflicts
     const teacherMap = new Map<string, ScheduleGene[]>();
@@ -433,10 +473,24 @@ export class GeneticAlgorithm {
   }
 
   /**
-   * Validate schedule - UPDATED
+   * FIXED: Validate schedule dengan check jam operasional
    */
   public validate(schedule: Schedule): ValidationResult {
     const errors: string[] = [];
+
+    // FIXED: Check invalid time slots
+    let invalidCount = 0;
+    schedule.slots.forEach(slot => {
+      if (!this.isValidSlotForClass(slot)) {
+        invalidCount++;
+      }
+    });
+
+    if (invalidCount > 0) {
+      errors.push(
+        `⚠️ Terdapat ${invalidCount} slot yang dijadwalkan di luar jam operasional kelas`
+      );
+    }
 
     // Check curriculum requirements per kelas
     for (const kelas of this.classes) {
