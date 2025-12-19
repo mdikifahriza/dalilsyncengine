@@ -1,11 +1,11 @@
-// src/components/layout/Sidebar.tsx
+// src/components/layout/Sidebar.tsx - UPDATED: Removed Rooms menu
 import { motion } from 'framer-motion';
 import {
   LayoutDashboard,
   Users,
   BookOpen,
   Calendar,
-  DoorOpen,
+  // ❌ REMOVED: DoorOpen,
   Sparkles,
   CalendarCheck,
   Clock,
@@ -61,7 +61,7 @@ const menuItems: MenuSection[] = [
     items: [
       { id: 'teachers', label: 'Guru', icon: Users },
       { id: 'classes', label: 'Kelas', icon: BookOpen },
-      { id: 'rooms', label: 'Ruangan', icon: DoorOpen },
+      // ❌ REMOVED: { id: 'rooms', label: 'Ruangan', icon: DoorOpen },
     ],
   },
 ];

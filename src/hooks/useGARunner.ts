@@ -1,13 +1,14 @@
-// src/hooks/useGARunner.ts - UPDATED untuk Time Blocks & Curriculum
+// src/hooks/useGARunner.ts - UPDATED: Remove rooms, add timeBlocksKelas
 import { useState, useCallback } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { gaService, CreateGARunInput } from '@/services/gaService';
 import { scheduleService, CreateScheduleSlotInput } from '@/services/scheduleService';
 import { timeBlockService } from '@/services/timeBlockService';
+import { timeBlockKelasService } from '@/services/timeBlockKelasService'; // ✅ NEW
 import { curriculumService } from '@/services/curriculumService';
 import { useTeachers } from './useTeachers';
 import { useClasses } from './useClasses';
-import { useRooms } from './useRooms';
+// ❌ REMOVED: import { useRooms } from './useRooms';
 import { GeneticAlgorithm, type Schedule } from '@/lib/geneticAlgorithm';
 import type { GARun } from '@/types/database.types';
 
@@ -29,7 +30,7 @@ export function useGARunner() {
   const { user } = useAuth();
   const { teachers } = useTeachers();
   const { classes } = useClasses();
-  const { rooms } = useRooms();
+  // ❌ REMOVED: const { rooms } = useRooms();
 
   const [isRunning, setIsRunning] = useState(false);
   const [progress, setProgress] = useState<GAProgress | null>(null);
@@ -44,9 +45,9 @@ export function useGARunner() {
         throw new Error('User not authenticated');
       }
 
-      // Validation
-      if (teachers.length === 0 || classes.length === 0 || rooms.length === 0) {
-        throw new Error('Data tidak lengkap. Pastikan sudah ada guru, kelas, dan ruangan.');
+      // ✅ UPDATED: Validation (removed rooms)
+      if (teachers.length === 0 || classes.length === 0) {
+        throw new Error('Data tidak lengkap. Pastikan sudah ada guru dan kelas.');
       }
 
       setIsRunning(true);
@@ -61,31 +62,41 @@ export function useGARunner() {
       let gaRunRecord: GARun | null = null;
 
       try {
-        // UPDATED: Load time blocks & curriculum
+        // ✅ UPDATED: Load time blocks, timeBlocksKelas, & curriculum
         const [timeBlocks, curriculum] = await Promise.all([
-          timeBlockService.getLessonBlocks(user.id),
+          timeBlockService.getAll(user.id),
           curriculumService.getAll(user.id),
         ]);
 
+        // ✅ NEW: Load time blocks assignments for all classes
+        const timeBlocksKelasArrays = await Promise.all(
+          classes.map(kelas => timeBlockKelasService.getByKelas(kelas.id))
+        );
+        const timeBlocksKelas = timeBlocksKelasArrays.flat();
+
         // Validation
         if (timeBlocks.length === 0) {
-          throw new Error('Tidak ada blok waktu untuk pelajaran. Silakan atur blok waktu terlebih dahulu.');
+          throw new Error('Tidak ada blok waktu. Silakan atur blok waktu terlebih dahulu.');
+        }
+
+        if (timeBlocksKelas.length === 0) {
+          throw new Error('Belum ada time blocks yang di-assign ke kelas. Silakan assign time blocks di halaman Blok Waktu.');
         }
 
         if (curriculum.length === 0) {
           throw new Error('Tidak ada kurikulum yang diatur. Silakan atur kurikulum kelas terlebih dahulu.');
         }
 
-        // Validate curriculum
-        const validation = await curriculumService.validate(user.id);
-        if (!validation.valid) {
-          throw new Error(`Kurikulum belum lengkap: ${validation.errors[0]}`);
+        // Validate curriculum has teachers assigned
+        const curriculumWithoutTeacher = curriculum.filter(c => !c.guru_id);
+        if (curriculumWithoutTeacher.length > 0) {
+          throw new Error(`Ada ${curriculumWithoutTeacher.length} mata pelajaran yang belum ditugaskan guru.`);
         }
 
         // Create GA run record in database
         gaRunRecord = await gaService.create(user.id, config);
 
-        // UPDATED: Initialize GA with time blocks & curriculum
+        // ✅ UPDATED: Initialize GA without rooms, with timeBlocksKelas
         const ga = new GeneticAlgorithm(
           {
             maxGenerations: config.max_generations,
@@ -96,10 +107,17 @@ export function useGARunner() {
           },
           teachers,
           classes,
-          rooms,
-          timeBlocks, // BARU
-          curriculum  // BARU
+          // ❌ REMOVED: rooms,
+          timeBlocks,
+          timeBlocksKelas, // ✅ NEW
+          curriculum
         );
+
+        // ✅ NEW: Validate before running
+        const validation = ga.validate();
+        if (!validation.valid) {
+          throw new Error(`Validasi gagal: ${validation.errors.join(', ')}`);
+        }
 
         setProgress(prev => prev ? { ...prev, status: 'running' } : null);
 
@@ -118,16 +136,16 @@ export function useGARunner() {
           }, 100);
         });
 
-        // UPDATED: Convert to database format dengan time_block_id
+        // ✅ UPDATED: Convert to database format (removed ruang_id)
         const scheduleSlots: CreateScheduleSlotInput[] = bestSchedule.slots.map(slot => ({
           ga_run_id: gaRunRecord.id,
           kelas_id: slot.kelas_id,
           guru_id: slot.guru_id,
           mapel_id: slot.mapel_id,
-          ruang_id: slot.ruang_id,
+          // ❌ REMOVED: ruang_id: slot.ruang_id,
           hari: slot.hari,
-          time_block_id: slot.time_block_id, // BARU
-          jam_ke: slot.jam_ke, // backward compatibility
+          time_block_id: slot.time_block_id,
+          jam_ke: slot.jam_ke,
         }));
 
         // Save schedule to database
@@ -168,7 +186,7 @@ export function useGARunner() {
         setIsRunning(false);
       }
     },
-    [user, teachers, classes, rooms]
+    [user, teachers, classes] // ❌ REMOVED: rooms from dependencies
   );
 
   return {

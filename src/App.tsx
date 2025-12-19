@@ -1,4 +1,4 @@
-// src/App.tsx
+// src/App.tsx - UPDATED: Removed RoomsPage
 import React, { useState } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import MainLayout from './components/layout/MainLayout';
@@ -8,7 +8,7 @@ import DashboardPage from './pages/DashboardPage';
 import TeachersPage from './pages/TeachersPage';
 import ClassesPage from './pages/ClassesPage';
 import SubjectsPage from './pages/SubjectsPage';
-import RoomsPage from './pages/RoomsPage';
+// ❌ REMOVED: import RoomsPage from './pages/RoomsPage';
 import GeneratorPage from './pages/GeneratorPage';
 import SchedulePage from './pages/SchedulePage';
 import TimeBlocksPage from './pages/TimeBlocksPage';
@@ -55,10 +55,9 @@ function AppContent() {
         return <ClassesPage />;
       case 'subjects':
         return <SubjectsPage />;
-      case 'rooms':
-        return <RoomsPage />;
+      // ❌ REMOVED: case 'rooms'
       case 'generator':
-        return <GeneratorPage />;
+        return <GeneratorPage onNavigate={setCurrentView} />;
       case 'schedule':
         return <SchedulePage />;
       case 'curriculum':

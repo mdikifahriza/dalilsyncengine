@@ -1,7 +1,16 @@
-// src/lib/geneticAlgorithm.ts - FIXED: Enforce Jam Pulang Per Kelas
-// Pure GA logic - No React dependencies
+// src/lib/geneticAlgorithm.ts - UPDATED VERSION
+// CHANGES:
+// - REMOVED: All Room-related logic, ruang_id from ScheduleGene
+// - ADDED: TimeBlockKelas support for per-class time blocks
+// - UPDATED: Uses time_blocks_kelas assignments instead of global time blocks
 
-import type { Teacher, ClassGroup, Room, TimeBlock, MapelKelas } from '@/types/database.types';
+import type { 
+  Teacher, 
+  ClassGroup, 
+  TimeBlock, 
+  MapelKelas,
+  TimeBlockKelasWithRelations 
+} from '@/types/database.types';
 
 export interface Schedule {
   slots: ScheduleGene[];
@@ -9,11 +18,11 @@ export interface Schedule {
   conflicts: string[];
 }
 
+// ❌ REMOVED: ruang_id
 export interface ScheduleGene {
   kelas_id: number;
   guru_id: number;
   mapel_id: number;
-  ruang_id: number;
   hari: string;
   time_block_id: number;
   jam_ke?: number;
@@ -36,23 +45,26 @@ export class GeneticAlgorithm {
   private config: GAConfig;
   private teachers: Teacher[];
   private classes: ClassGroup[];
-  private rooms: Room[];
-  private timeBlocks: TimeBlock[];
+  // ❌ REMOVED: private rooms: Room[];
+  private timeBlocks: TimeBlock[]; // Global pool of time blocks
+  private timeBlocksKelas: TimeBlockKelasWithRelations[]; // ✨ NEW: Per-class assignments
   private curriculum: MapelKelas[];
 
   constructor(
     config: GAConfig,
     teachers: Teacher[],
     classes: ClassGroup[],
-    rooms: Room[],
+    // ❌ REMOVED: rooms: Room[],
     timeBlocks: TimeBlock[],
+    timeBlocksKelas: TimeBlockKelasWithRelations[], // ✨ NEW
     curriculum: MapelKelas[]
   ) {
     this.config = config;
     this.teachers = teachers;
     this.classes = classes;
-    this.rooms = rooms;
-    this.timeBlocks = timeBlocks.filter(tb => tb.tipe_block === 'lesson' && !tb.is_fixed);
+    // ❌ REMOVED: this.rooms = rooms;
+    this.timeBlocks = timeBlocks; // Keep all time blocks for reference
+    this.timeBlocksKelas = timeBlocksKelas; // ✨ NEW: Assignments
     this.curriculum = curriculum;
   }
 
@@ -109,12 +121,9 @@ export class GeneticAlgorithm {
 
   private initializePopulation(): Schedule[] {
     const population: Schedule[] = [];
-
     for (let i = 0; i < this.config.populationSize; i++) {
-      const schedule = this.createRandomSchedule();
-      population.push(schedule);
+      population.push(this.createRandomSchedule());
     }
-
     return population;
   }
 
@@ -136,22 +145,18 @@ export class GeneticAlgorithm {
           let assigned = false;
 
           while (attempts < 200 && !assigned) {
-            // FIXED: Get available blocks yang sesuai jam operasional kelas
-            const availableBlocks = this.getAvailableBlocksForClass(kelas);
-            if (availableBlocks.length === 0) break;
-
-            const timeBlock = availableBlocks[Math.floor(Math.random() * availableBlocks.length)];
-            
+            // ✨ NEW: Get available blocks yang sudah di-assign ke kelas ini
             const hariOperasional = kelas.hari_operasional || ['Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat'];
             const hari = hariOperasional[Math.floor(Math.random() * hariOperasional.length)];
 
-            // Check if time block berlaku di hari ini
-            if (timeBlock.hari_berlaku && timeBlock.hari_berlaku.length > 0) {
-              if (!timeBlock.hari_berlaku.includes(hari)) {
-                attempts++;
-                continue;
-              }
+            const availableBlocks = this.getAvailableBlocksForClassAndDay(kelas.id, hari);
+            
+            if (availableBlocks.length === 0) {
+              attempts++;
+              continue;
             }
+
+            const timeBlock = availableBlocks[Math.floor(Math.random() * availableBlocks.length)];
 
             const slotKey = `${kelas.id}-${hari}-${timeBlock.id}`;
 
@@ -161,26 +166,11 @@ export class GeneticAlgorithm {
                 continue;
               }
 
-              let room = this.rooms[Math.floor(Math.random() * this.rooms.length)];
-              
-              const mapel = this.curriculum.find(c => c.mapel_id === currItem.mapel_id);
-              if (mapel?.mapel?.ruang_khusus) {
-                const specialRoom = this.rooms.find(r =>
-                  r.nama_ruang.toLowerCase().includes(mapel.mapel.ruang_khusus!.toLowerCase())
-                );
-                if (specialRoom) room = specialRoom;
-              }
-
-              if (kelas.ruang_default_id && !mapel?.mapel?.ruang_khusus) {
-                const defaultRoom = this.rooms.find(r => r.id === kelas.ruang_default_id);
-                if (defaultRoom) room = defaultRoom;
-              }
-
               slots.push({
                 kelas_id: kelas.id,
                 guru_id: teacher.id,
                 mapel_id: currItem.mapel_id,
-                ruang_id: room.id,
+                // ❌ REMOVED: ruang_id
                 hari: hari,
                 time_block_id: timeBlock.id,
                 jam_ke: timeBlock.urutan,
@@ -200,46 +190,40 @@ export class GeneticAlgorithm {
   }
 
   /**
-   * FIXED: Get available time blocks yang STRICTLY dalam jam operasional kelas
+   * ✨ NEW: Get available time blocks for specific class and day
+   * Returns only LESSON blocks that are assigned to this class
    */
-  private getAvailableBlocksForClass(kelas: ClassGroup): TimeBlock[] {
-    return this.timeBlocks.filter(tb => {
-      // FIXED: Strict check jam_mulai dan jam_selesai kelas
-      if (kelas.jam_mulai && kelas.jam_selesai) {
-        const blockStart = tb.jam_mulai.slice(0, 5); // "07:00:00" -> "07:00"
-        const blockEnd = tb.jam_selesai.slice(0, 5);
-        const classStart = kelas.jam_mulai.slice(0, 5);
-        const classEnd = kelas.jam_selesai.slice(0, 5);
+  private getAvailableBlocksForClassAndDay(kelasId: number, hari: string): TimeBlock[] {
+    // Filter assignments untuk kelas ini di hari ini
+    const kelasAssignments = this.timeBlocksKelas.filter(tbk =>
+      tbk.kelas_id === kelasId &&
+      (!tbk.hari || tbk.hari === hari) &&
+      tbk.time_block?.tipe_block === 'lesson'
+    );
 
-        // Block harus SEPENUHNYA dalam range kelas
-        // Block start >= class start DAN block end <= class end
-        return blockStart >= classStart && blockEnd <= classEnd;
-      }
-      return true;
-    });
+    // Return the actual time blocks
+    return kelasAssignments
+      .map(tbk => tbk.time_block)
+      .filter((tb): tb is TimeBlock => tb !== undefined)
+      .sort((a, b) => a.urutan - b.urutan);
   }
 
   /**
-   * FIXED: Validate apakah time block sesuai dengan jam operasional kelas
+   * ✨ UPDATED: Validate apakah time block valid untuk kelas ini
    */
   private isValidSlotForClass(slot: ScheduleGene): boolean {
     const kelas = this.classes.find(c => c.id === slot.kelas_id);
     if (!kelas) return false;
 
-    const timeBlock = this.timeBlocks.find(tb => tb.id === slot.time_block_id);
-    if (!timeBlock) return false;
+    // Check if this time block is assigned to this class for this day
+    const isAssigned = this.timeBlocksKelas.some(tbk =>
+      tbk.kelas_id === slot.kelas_id &&
+      tbk.time_block_id === slot.time_block_id &&
+      (!tbk.hari || tbk.hari === slot.hari) &&
+      tbk.time_block?.tipe_block === 'lesson'
+    );
 
-    // FIXED: Check strict
-    if (kelas.jam_mulai && kelas.jam_selesai) {
-      const blockStart = timeBlock.jam_mulai.slice(0, 5);
-      const blockEnd = timeBlock.jam_selesai.slice(0, 5);
-      const classStart = kelas.jam_mulai.slice(0, 5);
-      const classEnd = kelas.jam_selesai.slice(0, 5);
-
-      return blockStart >= classStart && blockEnd <= classEnd;
-    }
-
-    return true;
+    return isAssigned;
   }
 
   private tournamentSelection(population: Schedule[], tournamentSize = 5): Schedule {
@@ -255,263 +239,204 @@ export class GeneticAlgorithm {
   }
 
   private crossover(parent1: Schedule, parent2: Schedule): Schedule {
-    const cutPoint = Math.floor(Math.random() * parent1.slots.length);
-
+    const crossoverPoint = Math.floor(Math.random() * parent1.slots.length);
     const childSlots = [
-      ...parent1.slots.slice(0, cutPoint),
-      ...parent2.slots.slice(cutPoint),
+      ...parent1.slots.slice(0, crossoverPoint),
+      ...parent2.slots.slice(crossoverPoint),
     ];
 
     return { slots: childSlots, fitness: 0, conflicts: [] };
   }
 
   private mutate(schedule: Schedule): Schedule {
-    const mutatedSlots = schedule.slots.map(slot => {
-      if (Math.random() < 0.1) {
-        const mutationType = Math.random();
+    const mutatedSlots = [...schedule.slots];
 
-        if (mutationType < 0.33) {
-          // Change hari
-          const kelas = this.classes.find(c => c.id === slot.kelas_id);
-          const hariOperasional = kelas?.hari_operasional || ['Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat'];
-          return { 
-            ...slot, 
-            hari: hariOperasional[Math.floor(Math.random() * hariOperasional.length)] 
-          };
-        } else if (mutationType < 0.66) {
-          // FIXED: Change time block dengan validasi
-          const kelas = this.classes.find(c => c.id === slot.kelas_id);
-          if (kelas) {
-            const availableBlocks = this.getAvailableBlocksForClass(kelas);
-            if (availableBlocks.length > 0) {
-              const newBlock = availableBlocks[Math.floor(Math.random() * availableBlocks.length)];
-              return {
-                ...slot,
-                time_block_id: newBlock.id,
-                jam_ke: newBlock.urutan,
-              };
-            }
-          }
-          return slot;
-        } else {
-          // Change room
-          return {
-            ...slot,
-            ruang_id: this.rooms[Math.floor(Math.random() * this.rooms.length)].id,
-          };
-        }
-      }
+    if (mutatedSlots.length === 0) return schedule;
 
-      return slot;
-    });
+    const randomIndex = Math.floor(Math.random() * mutatedSlots.length);
+    const slot = mutatedSlots[randomIndex];
+
+    const kelas = this.classes.find(c => c.id === slot.kelas_id);
+    if (!kelas) return schedule;
+
+    const hariOperasional = kelas.hari_operasional || ['Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat'];
+    const newHari = hariOperasional[Math.floor(Math.random() * hariOperasional.length)];
+
+    const availableBlocks = this.getAvailableBlocksForClassAndDay(slot.kelas_id, newHari);
+    
+    if (availableBlocks.length === 0) return schedule;
+
+    const newTimeBlock = availableBlocks[Math.floor(Math.random() * availableBlocks.length)];
+
+    mutatedSlots[randomIndex] = {
+      ...slot,
+      hari: newHari,
+      time_block_id: newTimeBlock.id,
+      jam_ke: newTimeBlock.urutan,
+    };
 
     return { slots: mutatedSlots, fitness: 0, conflicts: [] };
   }
 
-  /**
-   * FIXED: Calculate fitness dengan penalty untuk slot di luar jam kelas
-   */
   private calculateFitness(schedule: Schedule): number {
-    let score = 100;
+    let fitness = 100;
+    const conflicts = this.detectConflicts(schedule);
 
-    // FIXED 1: Penalty BERAT untuk slot di luar jam operasional kelas
-    let invalidTimeSlots = 0;
-    schedule.slots.forEach(slot => {
-      if (!this.isValidSlotForClass(slot)) {
-        invalidTimeSlots++;
-      }
-    });
-    score -= invalidTimeSlots * 25; // VERY HEAVY PENALTY
+    fitness -= conflicts.length * 5;
 
-    // FIXED 2: Penalty untuk distribusi jam tidak merata per hari per kelas
-    const dailyHoursPerClass = new Map<string, number>();
-    schedule.slots.forEach(slot => {
-      const key = `${slot.kelas_id}-${slot.hari}`;
-      dailyHoursPerClass.set(key, (dailyHoursPerClass.get(key) || 0) + 1);
-    });
+    // Bonus: Prefer consecutive lessons
+    for (const kelas of this.classes) {
+      const kelasSlots = schedule.slots
+        .filter(s => s.kelas_id === kelas.id)
+        .sort((a, b) => {
+          if (a.hari !== b.hari) {
+            return a.hari.localeCompare(b.hari);
+          }
+          return (a.jam_ke || 0) - (b.jam_ke || 0);
+        });
 
-    // Check apakah ada kelas yang exceed jam_selesai di hari tertentu
-    dailyHoursPerClass.forEach((hours, key) => {
-      const [kelasId, hari] = key.split('-');
-      const kelas = this.classes.find(c => c.id === parseInt(kelasId));
-      if (kelas && kelas.jam_mulai && kelas.jam_selesai) {
-        // Hitung max jam per hari dari time blocks available
-        const availableBlocks = this.getAvailableBlocksForClass(kelas);
-        if (hours > availableBlocks.length) {
-          score -= (hours - availableBlocks.length) * 10;
+      let consecutiveCount = 0;
+      for (let i = 1; i < kelasSlots.length; i++) {
+        if (
+          kelasSlots[i].hari === kelasSlots[i - 1].hari &&
+          (kelasSlots[i].jam_ke || 0) === (kelasSlots[i - 1].jam_ke || 0) + 1
+        ) {
+          consecutiveCount++;
         }
       }
-    });
-
-    // 1. Teacher conflicts
-    const teacherMap = new Map<string, number>();
-    schedule.slots.forEach(slot => {
-      const key = `${slot.guru_id}-${slot.hari}-${slot.time_block_id}`;
-      teacherMap.set(key, (teacherMap.get(key) || 0) + 1);
-    });
-
-    teacherMap.forEach(count => {
-      if (count > 1) {
-        score -= (count - 1) * 15;
-      }
-    });
-
-    // 2. Room conflicts
-    const roomMap = new Map<string, number>();
-    schedule.slots.forEach(slot => {
-      const key = `${slot.ruang_id}-${slot.hari}-${slot.time_block_id}`;
-      roomMap.set(key, (roomMap.get(key) || 0) + 1);
-    });
-
-    roomMap.forEach(count => {
-      if (count > 1) {
-        score -= (count - 1) * 15;
-      }
-    });
-
-    // 3. Class conflicts
-    const classMap = new Map<string, number>();
-    schedule.slots.forEach(slot => {
-      const key = `${slot.kelas_id}-${slot.hari}-${slot.time_block_id}`;
-      classMap.set(key, (classMap.get(key) || 0) + 1);
-    });
-
-    classMap.forEach(count => {
-      if (count > 1) {
-        score -= (count - 1) * 20;
-      }
-    });
-
-    // 4. Teacher max hours per week
-    const teacherHours = new Map<number, number>();
-    schedule.slots.forEach(slot => {
-      teacherHours.set(slot.guru_id, (teacherHours.get(slot.guru_id) || 0) + 1);
-    });
-
-    teacherHours.forEach((hours, teacherId) => {
-      const teacher = this.teachers.find(t => t.id === teacherId);
-      if (teacher && hours > teacher.jam_maks) {
-        score -= (hours - teacher.jam_maks) * 5;
-      }
-    });
-
-    // 5. Balanced distribution across days
-    const dayDistribution = new Map<string, number>();
-    schedule.slots.forEach(slot => {
-      dayDistribution.set(slot.hari, (dayDistribution.get(slot.hari) || 0) + 1);
-    });
-
-    const days = Array.from(dayDistribution.keys());
-    if (days.length > 0) {
-      const avgPerDay = schedule.slots.length / days.length;
-      dayDistribution.forEach(count => {
-        const deviation = Math.abs(count - avgPerDay);
-        score -= deviation * 0.2;
-      });
+      fitness += consecutiveCount * 0.5;
     }
 
-    return Math.max(0, Math.min(100, score));
+    // Bonus: Balanced distribution
+    for (const kelas of this.classes) {
+      const hariOperasional = kelas.hari_operasional || ['Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat'];
+      const slotsPerDay: { [hari: string]: number } = {};
+
+      hariOperasional.forEach(hari => {
+        slotsPerDay[hari] = schedule.slots.filter(
+          s => s.kelas_id === kelas.id && s.hari === hari
+        ).length;
+      });
+
+      const avg = Object.values(slotsPerDay).reduce((a, b) => a + b, 0) / hariOperasional.length;
+      const variance = Object.values(slotsPerDay).reduce((sum, val) => sum + Math.pow(val - avg, 2), 0) / hariOperasional.length;
+
+      fitness -= variance * 0.2;
+    }
+
+    return Math.max(0, fitness);
   }
 
-  /**
-   * FIXED: Detect conflicts termasuk invalid time slots
-   */
   private detectConflicts(schedule: Schedule): string[] {
     const conflicts: string[] = [];
 
-    // FIXED: Detect invalid time slots (di luar jam operasional kelas)
-    schedule.slots.forEach(slot => {
+    // 1. Teacher conflicts (same teacher, same time, same day)
+    const teacherSlots: { [key: string]: ScheduleGene[] } = {};
+
+    for (const slot of schedule.slots) {
+      const key = `${slot.guru_id}-${slot.hari}-${slot.time_block_id}`;
+      if (!teacherSlots[key]) {
+        teacherSlots[key] = [];
+      }
+      teacherSlots[key].push(slot);
+
+      if (teacherSlots[key].length > 1) {
+        const teacher = this.teachers.find(t => t.id === slot.guru_id);
+        conflicts.push(
+          `Guru "${teacher?.nama}" mengajar di ${teacherSlots[key].length} kelas pada ${slot.hari} jam ${slot.jam_ke}`
+        );
+      }
+    }
+
+    // ❌ REMOVED: Room conflicts (no longer checking room conflicts)
+
+    // 2. Class conflicts (same class, same time, same day)
+    const classSlots: { [key: string]: ScheduleGene[] } = {};
+
+    for (const slot of schedule.slots) {
+      const key = `${slot.kelas_id}-${slot.hari}-${slot.time_block_id}`;
+      if (!classSlots[key]) {
+        classSlots[key] = [];
+      }
+      classSlots[key].push(slot);
+
+      if (classSlots[key].length > 1) {
+        const kelas = this.classes.find(c => c.id === slot.kelas_id);
+        conflicts.push(
+          `Kelas "${kelas?.nama_kelas}" memiliki ${classSlots[key].length} pelajaran pada ${slot.hari} jam ${slot.jam_ke}`
+        );
+      }
+    }
+
+    // 3. Teacher max hours per week
+    const teacherHours: { [teacherId: number]: number } = {};
+
+    for (const slot of schedule.slots) {
+      teacherHours[slot.guru_id] = (teacherHours[slot.guru_id] || 0) + 1;
+    }
+
+    for (const teacherId in teacherHours) {
+      const teacher = this.teachers.find(t => t.id === Number(teacherId));
+      if (teacher && teacherHours[teacherId] > teacher.jam_maks) {
+        conflicts.push(
+          `Guru "${teacher.nama}" melebihi jam maksimal (${teacherHours[teacherId]}/${teacher.jam_maks})`
+        );
+      }
+    }
+
+    // 4. ✨ NEW: Check if slots use time blocks assigned to their class
+    for (const slot of schedule.slots) {
       if (!this.isValidSlotForClass(slot)) {
         const kelas = this.classes.find(c => c.id === slot.kelas_id);
         const timeBlock = this.timeBlocks.find(tb => tb.id === slot.time_block_id);
-        if (kelas && timeBlock) {
-          conflicts.push(
-            `⚠️ ${kelas.nama_kelas} dijadwalkan di ${timeBlock.nama_block} (${timeBlock.jam_mulai}-${timeBlock.jam_selesai}) ` +
-            `yang melebihi jam operasional kelas (${kelas.jam_mulai}-${kelas.jam_selesai})`
-          );
-        }
-      }
-    });
-
-    // Teacher conflicts
-    const teacherMap = new Map<string, ScheduleGene[]>();
-    schedule.slots.forEach(slot => {
-      const key = `${slot.guru_id}-${slot.hari}-${slot.time_block_id}`;
-      if (!teacherMap.has(key)) teacherMap.set(key, []);
-      teacherMap.get(key)!.push(slot);
-    });
-
-    teacherMap.forEach((slots, key) => {
-      if (slots.length > 1) {
-        const teacher = this.teachers.find(t => t.id === slots[0].guru_id);
-        const timeBlock = this.timeBlocks.find(tb => tb.id === slots[0].time_block_id);
         conflicts.push(
-          `Guru ${teacher?.nama} mengajar ${slots.length} kelas pada ${slots[0].hari} ${timeBlock?.nama_block}`
+          `Time block "${timeBlock?.nama_block}" tidak di-assign ke kelas "${kelas?.nama_kelas}" untuk hari ${slot.hari}`
         );
       }
-    });
+    }
 
-    // Room conflicts
-    const roomMap = new Map<string, ScheduleGene[]>();
-    schedule.slots.forEach(slot => {
-      const key = `${slot.ruang_id}-${slot.hari}-${slot.time_block_id}`;
-      if (!roomMap.has(key)) roomMap.set(key, []);
-      roomMap.get(key)!.push(slot);
-    });
-
-    roomMap.forEach((slots, key) => {
-      if (slots.length > 1) {
-        const room = this.rooms.find(r => r.id === slots[0].ruang_id);
-        const timeBlock = this.timeBlocks.find(tb => tb.id === slots[0].time_block_id);
-        conflicts.push(
-          `Ruang ${room?.nama_ruang} digunakan ${slots.length} kelas pada ${slots[0].hari} ${timeBlock?.nama_block}`
-        );
-      }
-    });
-
-    return conflicts;
+    return [...new Set(conflicts)];
   }
 
-  /**
-   * FIXED: Validate schedule dengan check jam operasional
-   */
-  public validate(schedule: Schedule): ValidationResult {
+  public validate(): ValidationResult {
     const errors: string[] = [];
 
-    // FIXED: Check invalid time slots
-    let invalidCount = 0;
-    schedule.slots.forEach(slot => {
-      if (!this.isValidSlotForClass(slot)) {
-        invalidCount++;
-      }
-    });
-
-    if (invalidCount > 0) {
-      errors.push(
-        `⚠️ Terdapat ${invalidCount} slot yang dijadwalkan di luar jam operasional kelas`
-      );
+    if (this.teachers.length === 0) {
+      errors.push('Tidak ada data guru');
     }
 
-    // Check curriculum requirements per kelas
-    for (const kelas of this.classes) {
-      const kelasCurriculum = this.curriculum.filter(c => c.kelas_id === kelas.id);
-      
-      for (const currItem of kelasCurriculum) {
-        const count = schedule.slots.filter(
-          s => s.kelas_id === kelas.id && s.mapel_id === currItem.mapel_id
-        ).length;
+    if (this.classes.length === 0) {
+      errors.push('Tidak ada data kelas');
+    }
 
-        if (count !== currItem.jumlah_jam_per_minggu) {
+    // ❌ REMOVED: Room validation
+
+    if (this.curriculum.length === 0) {
+      errors.push('Tidak ada data kurikulum');
+    }
+
+    // ✨ NEW: Validate time blocks assignments
+    for (const kelas of this.classes) {
+      const hariOperasional = kelas.hari_operasional || ['Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat'];
+      
+      for (const hari of hariOperasional) {
+        const availableBlocks = this.getAvailableBlocksForClassAndDay(kelas.id, hari);
+        
+        if (availableBlocks.length === 0) {
           errors.push(
-            `Kelas ${kelas.nama_kelas} - Mapel ID ${currItem.mapel_id}: ${count} jam (seharusnya ${currItem.jumlah_jam_per_minggu})`
+            `Kelas "${kelas.nama_kelas}" tidak memiliki time blocks untuk hari ${hari}`
           );
         }
       }
     }
 
-    // Check conflicts
-    const conflicts = this.detectConflicts(schedule);
-    errors.push(...conflicts);
+    for (const currItem of this.curriculum) {
+      if (!currItem.guru_id) {
+        errors.push(
+          `Mata pelajaran ID ${currItem.mapel_id} di kelas ID ${currItem.kelas_id} belum memiliki guru`
+        );
+      }
+    }
 
     return {
       valid: errors.length === 0,

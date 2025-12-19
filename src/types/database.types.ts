@@ -1,5 +1,8 @@
-// src/types/database.types.ts - EXTENDED VERSION
-// Add these to your existing types
+// src/types/database.types.ts - UPDATED VERSION
+// CHANGES:
+// - REMOVED: Room interface, ruang_id from ScheduleSlot, ruang_default_id from ClassGroup
+// - ADDED: TimeBlockKelas interface
+// - UPDATED: ScheduleSlot (removed ruang_id, added ruang_nama optional)
 
 export type Jenjang = 'TK' | 'PAUD' | 'SD' | 'MI' | 'SMP' | 'MTs' | 'SMA' | 'MA' | 'SMK';
 export type ModelSekolah = 'Reguler' | 'Boarding' | 'Mandiri' | 'Internasional';
@@ -7,7 +10,7 @@ export type TipeBlock = 'lesson' | 'break' | 'prayer' | 'event';
 export type Prioritas = 1 | 2 | 3; // 1=wajib, 2=muatan lokal, 3=ekstrakurikuler
 
 // =====================================================
-// NEW TYPES
+// CORE TYPES
 // =====================================================
 
 export interface SchoolProfile {
@@ -33,6 +36,15 @@ export interface TimeBlock {
   hari_berlaku?: string[] | null;
   warna: string;
   is_fixed: boolean;
+  created_at: string;
+}
+
+// ✨ NEW: Junction table untuk time blocks per kelas
+export interface TimeBlockKelas {
+  id: number;
+  kelas_id: number;
+  time_block_id: number;
+  hari?: string | null; // null = semua hari, 'Senin' = khusus Senin
   created_at: string;
 }
 
@@ -63,8 +75,29 @@ export interface ScheduleTemplate {
 }
 
 // =====================================================
-// EXTENDED EXISTING TYPES
+// MAIN ENTITY TYPES
 // =====================================================
+
+export interface Teacher {
+  id: number;
+  user_id: string;
+  nama: string;
+  mapel_id: number;
+  jam_maks: number;
+  hari_tidak_bisa?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Subject {
+  id: number;
+  user_id: string;
+  nama_mapel: string;
+  jumlah_jam_per_minggu: number;
+  ruang_khusus?: string;
+  created_at: string;
+  updated_at: string;
+}
 
 export interface ClassGroup {
   id: number;
@@ -73,11 +106,12 @@ export interface ClassGroup {
   tingkat?: number;
   jurusan?: string;
   
-  // NEW FIELDS
+  // Operating hours
   jam_mulai?: string; // "07:00:00"
   jam_selesai?: string; // "15:00:00"
   hari_operasional?: string[];
-  ruang_default_id?: number;
+  
+  // ❌ REMOVED: ruang_default_id
   wali_kelas?: string;
   jumlah_siswa?: number;
   
@@ -85,18 +119,23 @@ export interface ClassGroup {
   updated_at: string;
 }
 
+// ❌ REMOVED: Room interface completely
+
 export interface ScheduleSlot {
   id: number;
   ga_run_id: number;
   kelas_id: number;
   guru_id: number;
   mapel_id: number;
-  ruang_id: number;
+  // ❌ REMOVED: ruang_id
   hari: string;
-  jam_ke?: number; // Now optional
+  jam_ke?: number;
   
-  // NEW FIELDS
+  // Time block reference
   time_block_id?: number;
+  
+  // ✨ NEW: Optional text field untuk ruang (jika perlu manual)
+  ruang_nama?: string;
   keterangan?: string;
   
   created_at: string;
@@ -105,6 +144,15 @@ export interface ScheduleSlot {
 // =====================================================
 // WITH RELATIONS (for joins)
 // =====================================================
+
+export interface TimeBlockWithRelations extends TimeBlock {
+  slot_count?: number;
+}
+
+export interface TimeBlockKelasWithRelations extends TimeBlockKelas {
+  kelas?: ClassGroup;
+  time_block?: TimeBlock;
+}
 
 export interface MapelKelasWithRelations extends MapelKelas {
   kelas?: ClassGroup;
@@ -116,12 +164,8 @@ export interface ScheduleSlotWithDetails extends ScheduleSlot {
   kelas: ClassGroup;
   guru: Teacher;
   mapel: Subject;
-  ruang: Room;
+  // ❌ REMOVED: ruang field
   time_block?: TimeBlock;
-}
-
-export interface TimeBlockWithStats extends TimeBlock {
-  slot_count?: number; // jumlah jadwal yang pakai block ini
 }
 
 // =====================================================
@@ -151,6 +195,13 @@ export interface CreateTimeBlockInput {
 
 export interface UpdateTimeBlockInput extends Partial<CreateTimeBlockInput> {}
 
+// ✨ NEW: Input untuk assign time blocks ke kelas
+export interface AssignTimeBlockToKelasInput {
+  kelas_id: number;
+  time_block_id: number;
+  hari?: string | null;
+}
+
 export interface CreateMapelKelasInput {
   kelas_id: number;
   mapel_id: number;
@@ -161,6 +212,68 @@ export interface CreateMapelKelasInput {
 }
 
 export interface UpdateMapelKelasInput extends Partial<CreateMapelKelasInput> {}
+
+export interface CreateTeacherInput {
+  nama: string;
+  mapel_id: number;
+  jam_maks: number;
+  hari_tidak_bisa?: string;
+}
+
+export interface UpdateTeacherInput extends Partial<CreateTeacherInput> {}
+
+export interface CreateSubjectInput {
+  nama_mapel: string;
+  jumlah_jam_per_minggu: number;
+  ruang_khusus?: string;
+}
+
+export interface UpdateSubjectInput extends Partial<CreateSubjectInput> {}
+
+export interface CreateClassInput {
+  nama_kelas: string;
+  tingkat?: number;
+  jurusan?: string;
+  jam_mulai?: string;
+  jam_selesai?: string;
+  hari_operasional?: string[];
+  wali_kelas?: string;
+  jumlah_siswa?: number;
+}
+
+export interface UpdateClassInput extends Partial<CreateClassInput> {}
+
+// ❌ REMOVED: CreateRoomInput, UpdateRoomInput
+
+// =====================================================
+// VALIDATION & UTILITY TYPES
+// =====================================================
+
+// ✨ NEW: Untuk validasi JP vs blocks
+export interface ValidationResult {
+  valid: boolean;
+  errors: string[];
+  details?: {
+    kelas_id: number;
+    kelas_nama: string;
+    per_day: {
+      [hari: string]: {
+        required_jp: number;
+        available_blocks: number;
+        diff: number;
+      };
+    };
+  }[];
+}
+
+// ✨ NEW: Untuk count available blocks per kelas per hari
+export interface BlocksAvailability {
+  kelas_id: number;
+  per_day: {
+    [hari: string]: number; // jumlah blocks tersedia
+  };
+  total: number;
+}
 
 // =====================================================
 // CONSTANTS
