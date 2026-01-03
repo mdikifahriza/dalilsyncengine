@@ -1,10 +1,19 @@
 import React, { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
-import { Users, BookOpen, DoorOpen, BarChart3, Calendar, TrendingUp } from 'lucide-react';
+import { Users, BookOpen, Calendar, BarChart3 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import { useAuth } from '@/context/AuthContext';
 import { supabase } from '@/lib/supabase';
-import type { DashboardStats } from '@/types';
+
+// Definisi tipe data langsung di sini
+interface DashboardStats {
+  totalTeachers: number;
+  totalClasses: number;
+  totalSubjects: number;
+  totalGARuns: number;
+  lastRunDate: string;
+  successfulRuns: number;
+}
 
 export default function DashboardPage() {
   const { user } = useAuth();
@@ -12,7 +21,6 @@ export default function DashboardPage() {
     totalTeachers: 0,
     totalClasses: 0,
     totalSubjects: 0,
-    totalRooms: 0,
     totalGARuns: 0,
     lastRunDate: 'Belum ada',
     successfulRuns: 0,
@@ -31,7 +39,7 @@ export default function DashboardPage() {
     setLoading(true);
     try {
       // Fetch counts dari setiap tabel
-      const [teachers, classes, subjects, rooms,] = await Promise.all([
+      const [teachers, classes, subjects, gaRuns] = await Promise.all([
         supabase.from('guru').select('*', { count: 'exact', head: true }).eq('user_id', user.id),
         supabase.from('kelas').select('*', { count: 'exact', head: true }).eq('user_id', user.id),
         supabase.from('mapel').select('*', { count: 'exact', head: true }).eq('user_id', user.id),
@@ -58,7 +66,6 @@ export default function DashboardPage() {
         totalTeachers: teachers.count || 0,
         totalClasses: classes.count || 0,
         totalSubjects: subjects.count || 0,
-        totalRooms: rooms.count || 0,
         totalGARuns: gaRuns.count || 0,
         lastRunDate: lastRun?.timestamp_start
           ? new Date(lastRun.timestamp_start).toLocaleDateString('id-ID', {
@@ -94,6 +101,12 @@ export default function DashboardPage() {
       value: stats.totalSubjects,
       icon: Calendar,
       color: 'bg-purple-500',
+    },
+    {
+      title: 'Total GA Runs',
+      value: stats.totalGARuns,
+      icon: BarChart3,
+      color: 'bg-indigo-500',
     },
   ];
 
@@ -171,6 +184,43 @@ export default function DashboardPage() {
                   <span className="text-gray-600">Run Terakhir</span>
                   <span className="text-sm font-medium text-gray-700">
                     {stats.lastRunDate}
+                  </span>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </motion.div>
+
+        <motion.div
+          initial={{ opacity: 0, x: 20 }}
+          animate={{ opacity: 1, x: 0 }}
+          transition={{ delay: 0.5 }}
+        >
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Users className="w-5 h-5 text-blue-600" />
+                Ringkasan Data
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-4">
+                <div className="flex justify-between items-center p-3 bg-blue-50 rounded-lg">
+                  <span className="text-gray-700 font-medium">Guru Terdaftar</span>
+                  <span className="text-xl font-bold text-blue-600">
+                    {loading ? '...' : stats.totalTeachers}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center p-3 bg-emerald-50 rounded-lg">
+                  <span className="text-gray-700 font-medium">Kelas Aktif</span>
+                  <span className="text-xl font-bold text-emerald-600">
+                    {loading ? '...' : stats.totalClasses}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center p-3 bg-purple-50 rounded-lg">
+                  <span className="text-gray-700 font-medium">Mata Pelajaran</span>
+                  <span className="text-xl font-bold text-purple-600">
+                    {loading ? '...' : stats.totalSubjects}
                   </span>
                 </div>
               </div>
