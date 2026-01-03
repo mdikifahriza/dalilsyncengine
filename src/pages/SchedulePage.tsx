@@ -1,9 +1,6 @@
-// src/pages/SchedulePageEnhanced.tsx
-import { useState, useEffect, useRef } from 'react';
+// src/pages/SchedulePage.tsx - UPDATED: Using @react-pdf/renderer
+import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import jsPDF from 'jspdf';
-import html2canvas from 'html2canvas';
-
 import { 
   Calendar, 
   Download, 
@@ -15,7 +12,7 @@ import {
 } from 'lucide-react';
 
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
-import { Button } from '@/components/ui/ButtonJ';
+import { Button } from '@/components/ui/Button';
 import { Alert, AlertDescription } from '@/components/ui/Alert';
 
 import { useAuth } from '@/context/AuthContext';
@@ -23,11 +20,12 @@ import { gaService } from '@/services/gaService';
 import { enhancedScheduleService } from '@/services/enhancedScheduleService';
 import ScheduleTable from '@/components/schedule/ScheduleTable';
 import ScheduleMobileView from '@/components/schedule/ScheduleMobileView';
+import { exportScheduleToPDF } from '@/utils/exportScheduleToPDF';
 
 import type { ScheduleByClass } from '@/types/schedule.types';
 import type { GARun } from '@/types/database.types';
 
-export default function SchedulePageEnhanced() {
+export default function SchedulePage() {
   const { user } = useAuth();
 
   const [gaRuns, setGaRuns] = useState<GARun[]>([]);
@@ -38,8 +36,6 @@ export default function SchedulePageEnhanced() {
   const [expandedClasses, setExpandedClasses] = useState<Set<number>>(new Set());
   const [exporting, setExporting] = useState(false);
   const [deleting, setDeleting] = useState(false);
-
-  const exportRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (user) loadGARuns();
@@ -112,46 +108,23 @@ export default function SchedulePageEnhanced() {
     });
   };
 
-  const exportToPDF = async () => {
-    if (!exportRef.current) return;
+  const handleExportPDF = async () => {
+    if (!schedules.length) return;
 
     try {
       setExporting(true);
-      const pdf = new jsPDF('landscape', 'mm', 'a4');
       
-      // Get all class cards
-      const classCards = exportRef.current.querySelectorAll('.schedule-class-card');
-      
-      for (let i = 0; i < classCards.length; i++) {
-        const card = classCards[i] as HTMLElement;
-        
-        // Capture card as canvas
-        const canvas = await html2canvas(card, {
-          scale: 2,
-          useCORS: true,
-          logging: false,
-          backgroundColor: '#ffffff'
-        });
-
-        const imgData = canvas.toDataURL('image/png');
-        const imgWidth = 280; // A4 landscape width in mm (minus margins)
-        const imgHeight = (canvas.height * imgWidth) / canvas.width;
-
-        // Add new page if not first
-        if (i > 0) {
-          pdf.addPage();
-        }
-
-        pdf.addImage(imgData, 'PNG', 10, 10, imgWidth, imgHeight);
-      }
-
       const selectedRun = gaRuns.find(r => r.id === selectedRunId);
-      const filename = `Jadwal_${selectedRun ? formatDate(selectedRun.timestamp_start).replace(/[\/\s:]/g, '_') : 'Export'}.pdf`;
+      const filename = `Jadwal_${
+        selectedRun 
+          ? formatDate(selectedRun.timestamp_start).replace(/[\/\s:]/g, '_') 
+          : 'Export'
+      }.pdf`;
       
-      pdf.save(filename);
-    } catch (err) {
+      await exportScheduleToPDF(schedules, filename);
+    } catch (err: any) {
       console.error('Error exporting PDF:', err);
-      alert('Gagal export PDF');
+      alert('Gagal export PDF: ' + (err.message || 'Unknown error'));
     } finally {
       setExporting(false);
     }
@@ -197,7 +170,7 @@ export default function SchedulePageEnhanced() {
 
   if (loading && !schedules.length) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-indigo-50 via-purple-50 to-pink-50 p-4 md:p-8 flex items-center justify-center">
+      <div className="flex items-center justify-center h-96">
         <Card className="p-8">
           <div className="flex items-center gap-3">
             <Loader2 className="w-6 h-6 animate-spin text-indigo-600" />
@@ -209,191 +182,188 @@ export default function SchedulePageEnhanced() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-indigo-50 via-purple-50 to-pink-50 p-4 md:p-8">
-      <div className="max-w-7xl mx-auto space-y-6">
-        {/* Header */}
-        <motion.div
-          initial={{ opacity: 0, y: -20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="flex flex-col md:flex-row md:items-center md:justify-between gap-4"
-        >
-          <div>
-            <h1 className="text-2xl md:text-3xl font-bold text-gray-800 flex items-center gap-2">
-              <Calendar className="w-7 h-7 text-indigo-600" />
-              Jadwal Pelajaran
-            </h1>
-            <p className="text-sm text-gray-600 mt-1">
-              Hasil generate dengan Genetic Algorithm
-            </p>
-          </div>
+    <div className="space-y-6">
+      {/* Header */}
+      <motion.div
+        initial={{ opacity: 0, y: -20 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="flex flex-col md:flex-row md:items-center md:justify-between gap-4"
+      >
+        <div>
+          <h1 className="text-2xl md:text-3xl font-bold text-gray-800 flex items-center gap-2">
+            <Calendar className="w-7 h-7 text-indigo-600" />
+            Jadwal Pelajaran
+          </h1>
+          <p className="text-sm text-gray-600 mt-1">
+            Hasil generate dengan Genetic Algorithm
+          </p>
+        </div>
 
-          <div className="flex flex-col sm:flex-row gap-3">
-            {/* GA Run Selector */}
-            <select
-              value={selectedRunId || ''}
-              onChange={(e) => setSelectedRunId(Number(e.target.value))}
-              className="px-4 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
-            >
-              <option value="">Pilih Jadwal</option>
-              {gaRuns.map((run) => (
-                <option key={run.id} value={run.id}>
-                  {formatDate(run.timestamp_start)} - {run.status === 'completed' ? '✓ Berhasil' : '✗ Gagal'}
-                </option>
-              ))}
-            </select>
+        <div className="flex flex-col sm:flex-row gap-3">
+          {/* GA Run Selector */}
+          <select
+            value={selectedRunId || ''}
+            onChange={(e) => setSelectedRunId(Number(e.target.value))}
+            className="px-4 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+          >
+            <option value="">Pilih Jadwal</option>
+            {gaRuns.map((run) => (
+              <option key={run.id} value={run.id}>
+                {formatDate(run.timestamp_start)} - {run.status === 'completed' ? '✓ Berhasil' : '✗ Gagal'}
+              </option>
+            ))}
+          </select>
 
-            {/* Delete Button */}
-            <Button
-              onClick={deleteGARun}
-              disabled={deleting || !selectedRunId}
-              variant="destructive"
-              className="flex items-center gap-2"
-            >
-              {deleting ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  Menghapus...
-                </>
-              ) : (
-                <>
-                  <Trash2 className="w-4 h-4" />
-                  Hapus
-                </>
-              )}
-            </Button>
+          {/* Delete Button */}
+          <Button
+            onClick={deleteGARun}
+            disabled={deleting || !selectedRunId}
+            variant="destructive"
+            className="flex items-center gap-2"
+          >
+            {deleting ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Menghapus...
+              </>
+            ) : (
+              <>
+                <Trash2 className="w-4 h-4" />
+                Hapus
+              </>
+            )}
+          </Button>
 
-            {/* Export Button */}
-            <Button
-              onClick={exportToPDF}
-              disabled={exporting || !schedules.length}
-              className="flex items-center gap-2"
-            >
-              {exporting ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  Exporting...
-                </>
-              ) : (
-                <>
-                  <Download className="w-4 h-4" />
-                  Export PDF
-                </>
-              )}
-            </Button>
-          </div>
-        </motion.div>
+          {/* Export PDF Button */}
+          <Button
+            onClick={handleExportPDF}
+            disabled={exporting || !schedules.length}
+            className="flex items-center gap-2"
+          >
+            {exporting ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Exporting...
+              </>
+            ) : (
+              <>
+                <Download className="w-4 h-4" />
+                Export PDF
+              </>
+            )}
+          </Button>
+        </div>
+      </motion.div>
 
-        {/* Error Alert */}
-        {error && (
-          <Alert variant="destructive">
-            <AlertCircle className="w-4 h-4" />
-            <AlertDescription>{error}</AlertDescription>
-          </Alert>
-        )}
+      {/* Error Alert */}
+      {error && (
+        <Alert variant="destructive">
+          <AlertCircle className="w-4 h-4" />
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
 
-        {/* Schedule Cards */}
-        {schedules.length > 0 ? (
-          <div ref={exportRef} className="space-y-6">
-            {schedules.map((classSchedule) => {
-              const isExpanded = expandedClasses.has(classSchedule.kelas_id);
+      {/* Schedule Cards */}
+      {schedules.length > 0 ? (
+        <div className="space-y-6">
+          {schedules.map((classSchedule) => {
+            const isExpanded = expandedClasses.has(classSchedule.kelas_id);
 
-              return (
-                <motion.div
-                  key={classSchedule.kelas_id}
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  className="schedule-class-card"
-                >
-                  <Card className="overflow-hidden shadow-lg hover:shadow-xl transition-shadow">
-                    <CardHeader className="bg-gradient-to-r from-indigo-600 to-purple-600 text-white">
-                      <CardTitle className="flex items-center justify-between">
-                        <div className="flex items-center gap-3">
-                          <div className="p-2 bg-white/20 rounded-lg">
-                            <Calendar className="w-6 h-6" />
-                          </div>
-                          <div>
-                            <h2 className="text-xl font-bold">{classSchedule.kelas_nama}</h2>
-                            {classSchedule.tingkat && (
-                              <p className="text-sm text-indigo-100">Tingkat {classSchedule.tingkat}</p>
-                            )}
-                          </div>
+            return (
+              <motion.div
+                key={classSchedule.kelas_id}
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+              >
+                <Card className="overflow-hidden shadow-lg hover:shadow-xl transition-shadow">
+                  <CardHeader className="bg-gradient-to-r from-indigo-600 to-purple-600 text-white">
+                    <CardTitle className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className="p-2 bg-white/20 rounded-lg">
+                          <Calendar className="w-6 h-6" />
                         </div>
-
-                        {/* Mobile Toggle Button */}
-                        <button
-                          onClick={() => toggleClass(classSchedule.kelas_id)}
-                          className="md:hidden p-2 hover:bg-white/20 rounded-lg transition"
-                        >
-                          {isExpanded ? (
-                            <ChevronUp className="w-5 h-5" />
-                          ) : (
-                            <ChevronDown className="w-5 h-5" />
+                        <div>
+                          <h2 className="text-xl font-bold">{classSchedule.kelas_nama}</h2>
+                          {classSchedule.tingkat && (
+                            <p className="text-sm text-indigo-100">Tingkat {classSchedule.tingkat}</p>
                           )}
-                        </button>
-                      </CardTitle>
-                    </CardHeader>
+                        </div>
+                      </div>
 
-                    {/* Desktop View - Always visible */}
-                    <div className="hidden md:block">
-                      <CardContent className="p-4">
-                        <ScheduleTable days={classSchedule.days} />
-                      </CardContent>
-                    </div>
-
-                    {/* Mobile View - Collapsible */}
-                    {isExpanded && (
-                      <motion.div
-                        className="md:hidden"
-                        initial={{ height: 0, opacity: 0 }}
-                        animate={{ height: 'auto', opacity: 1 }}
-                        exit={{ height: 0, opacity: 0 }}
+                      {/* Mobile Toggle Button */}
+                      <button
+                        onClick={() => toggleClass(classSchedule.kelas_id)}
+                        className="md:hidden p-2 hover:bg-white/20 rounded-lg transition"
                       >
-                        <CardContent className="p-4">
-                          <ScheduleMobileView days={classSchedule.days} />
-                        </CardContent>
-                      </motion.div>
-                    )}
-                  </Card>
-                </motion.div>
-              );
-            })}
-          </div>
-        ) : (
-          <Card>
-            <CardContent className="p-12 text-center">
-              <AlertCircle className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-              <p className="text-gray-600">
-                {selectedRunId 
-                  ? 'Tidak ada jadwal untuk run yang dipilih'
-                  : 'Pilih jadwal untuk ditampilkan'}
-              </p>
-            </CardContent>
-          </Card>
-        )}
+                        {isExpanded ? (
+                          <ChevronUp className="w-5 h-5" />
+                        ) : (
+                          <ChevronDown className="w-5 h-5" />
+                        )}
+                      </button>
+                    </CardTitle>
+                  </CardHeader>
 
-        {/* Legend */}
-        {schedules.length > 0 && (
-          <Card className="bg-white/80 backdrop-blur">
-            <CardContent className="p-4">
-              <h3 className="font-semibold text-gray-800 mb-3">Keterangan:</h3>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm">
-                <div className="flex items-center gap-2">
-                  <div className="w-4 h-4 bg-green-200 border border-green-300 rounded"></div>
-                  <span>Non-JP (Istirahat, Sholat, dll)</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <div className="w-4 h-4 bg-purple-200 border border-purple-300 rounded"></div>
-                  <span>JP Tetap (Jadwal Tetap)</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <div className="w-4 h-4 bg-blue-200 border border-blue-300 rounded"></div>
-                  <span>JP Biasa (Hasil GA)</span>
-                </div>
+                  {/* Desktop View - Always visible */}
+                  <div className="hidden md:block">
+                    <CardContent className="p-4">
+                      <ScheduleTable days={classSchedule.days} />
+                    </CardContent>
+                  </div>
+
+                  {/* Mobile View - Collapsible */}
+                  {isExpanded && (
+                    <motion.div
+                      className="md:hidden"
+                      initial={{ height: 0, opacity: 0 }}
+                      animate={{ height: 'auto', opacity: 1 }}
+                      exit={{ height: 0, opacity: 0 }}
+                    >
+                      <CardContent className="p-4">
+                        <ScheduleMobileView days={classSchedule.days} />
+                      </CardContent>
+                    </motion.div>
+                  )}
+                </Card>
+              </motion.div>
+            );
+          })}
+        </div>
+      ) : (
+        <Card>
+          <CardContent className="p-12 text-center">
+            <AlertCircle className="w-12 h-12 text-gray-400 mx-auto mb-4" />
+            <p className="text-gray-600">
+              {selectedRunId 
+                ? 'Tidak ada jadwal untuk run yang dipilih'
+                : 'Pilih jadwal untuk ditampilkan'}
+            </p>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Legend */}
+      {schedules.length > 0 && (
+        <Card className="bg-white/80 backdrop-blur">
+          <CardContent className="p-4">
+            <h3 className="font-semibold text-gray-800 mb-3">Keterangan:</h3>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm">
+              <div className="flex items-center gap-2">
+                <div className="w-4 h-4 bg-green-200 border border-green-300 rounded"></div>
+                <span>Non-JP (Istirahat, Sholat, dll)</span>
               </div>
-            </CardContent>
-          </Card>
-        )}
-      </div>
+              <div className="flex items-center gap-2">
+                <div className="w-4 h-4 bg-purple-200 border border-purple-300 rounded"></div>
+                <span>JP Tetap (Jadwal Tetap)</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-4 h-4 bg-blue-200 border border-blue-300 rounded"></div>
+                <span>JP Biasa (Hasil GA)</span>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }
